@@ -80,7 +80,10 @@ __global__ void conway(const uint8_t* in, uint8_t* out)
 __global__ void draw(const uint8_t* in, uint32_t* out)
 {
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x, y = blockIdx.y * blockDim.y + threadIdx.y;
-    out[pos(x, y)] = 0xffffffff * (in[pos(x, y)] == 0xff);
+    if(in[pos(x, y)] == 0xff)
+        out[pos(x,y)] = 0x00006400;
+    else
+        out[pos(x, y)] = 0x00141414 ;
 }
 
 
@@ -92,7 +95,7 @@ int main(int argc, char* argv[])
     uint8_t* buffer;
     uint32_t* colours;
     curandGenerator_t gen;
-    if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_XORWOW) !=CURAND_STATUS_SUCCESS) SDL_Log("WE FUCKED UP");
+    if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_XORWOW) !=CURAND_STATUS_SUCCESS) SDL_Log("WE FUCKED UP: %s", cudaGetErrorString(cudaGetLastError()));
     curandSetPseudoRandomGeneratorSeed(gen, rand());
     cudaError_t err;
 
@@ -101,7 +104,10 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    SDL_Window* win = SDL_CreateWindow("conway's game of cuda", 0, 0, 1920, 1080, 0);
+    SDL_Window* win = SDL_CreateWindow("conway's game of cuda", 0, 0, 1920, 1080,
+                                       SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MOUSE_FOCUS |
+                                       0 | SDL_WINDOW_ALLOW_HIGHDPI |
+                                       SDL_WINDOW_SKIP_TASKBAR | SDL_WINDOW_SHOWN );
 
     SDL_Surface* sur = SDL_GetWindowSurface(win);
     SDL_Log("surdim : %i, surf: bpp: %i, fmt: %i, %s, h: %i, pitch: %i, pitch/4 : %f", sur->pitch * sur->h / 4, sur->format->BitsPerPixel, sur->format->format, SDL_GetPixelFormatName(sur->format->format), sur->h, sur->pitch, sur->pitch / 4.);
@@ -113,7 +119,7 @@ int main(int argc, char* argv[])
     if (curandGenerate(gen, reinterpret_cast<unsigned int *>(board), 1080 * 1920 / 4) !=CURAND_STATUS_SUCCESS) SDL_Log("RANDOM FUCKED UP");
     solidify<<<blocks, threads>>>(board);
     err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));;
+    if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
 
 
 
@@ -123,7 +129,7 @@ int main(int argc, char* argv[])
 
     while (running)
     {
-        //time = SDL_GetTicks();
+        time = SDL_GetTicks();
         SDL_Event e;
         while(SDL_PollEvent(&e)) {
             switch(e.type) {
@@ -185,11 +191,13 @@ int main(int argc, char* argv[])
         err = cudaDeviceSynchronize();
         if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
         //SDL_Log("helo");
-        // SDL_LockSurface(sur);
+        SDL_LockSurface(sur);
         cudaMemcpy(sur->pixels, colours, 4* 1080 * 1920, cudaMemcpyDeviceToHost);
-        // SDL_UnlockSurface(sur);
         SDL_UpdateWindowSurface(win);
-        //SDL_Log("here\n\n");
+        SDL_UnlockSurface(sur);
+        // while (SDL_GetTicks() - time < 4);
+        // SDL_Delay(1);
+        // SDL_Log("here\n\n");
         // SDL_Log("frametime: %i", SDL_GetTicks() - time);
     }
 
