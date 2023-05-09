@@ -1,11 +1,15 @@
 #include "cuda.h"
 #include "SDL2/SDL.h"
 #include "curand.h"
+#include <SDL2/SDL_keycode.h>
+#include <SDL2/SDL_render.h>
 
 //#define pos(x, y) (x + 1920*y)
 
 const dim3 threads(128, 8, 1);
 const dim3 blocks(15, 135, 1);
+
+#define n_colour 25
 
 __device__ uint32_t pos(uint32_t x, uint32_t y)
 {
@@ -15,10 +19,17 @@ __device__ uint32_t pos(uint32_t x, uint32_t y)
 __global__ void solidify(uint8_t* arr)
 {
     unsigned int ind = pos(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+    arr[ind] %= n_colour;
+    return;
     if (arr[ind] % 2 == 1)
         arr[ind] = 0xff;
     else
         arr[ind] = 0;
+}
+
+__global__ void clear(uint8_t* arr)
+{
+  arr[pos(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y)] = 0;
 }
 
 __global__ void conway(const uint8_t* in, uint8_t* out)
@@ -28,63 +39,73 @@ __global__ void conway(const uint8_t* in, uint8_t* out)
 
     int neighbors = 0;
 
-    if (x > 0)
-    {
-        if (y > 0) if (in[pos(x - 1, y - 1)] > 0)
+    for (int i = - (x > 0 ? 1 : 0); i < 1 + (x < 1919 ? 1 : 0); i++)
+        for (int j = - (y > 0 ? 1 : 0); j < 1 + (y < 1079 ? 1 : 0); j++)
+            if (in[pos(x + i, y + j)] % 2)
                 neighbors++;
+    
 
-        if (in[pos(x -1, y)] > 0)
-            neighbors++;
-
-        if (y < 1079) if (in[pos(x -1, y + 1)] > 0)
-                neighbors++;
-
-    }
-
-    if (y > 0) if (in[pos(x, y - 1)] > 0)
-            neighbors++;
-
-    if (y < 1079) if (in[pos(x, y + 1)] > 0)
-            neighbors++;
-
-    if (x < 1919)
-    {
-        if (y > 0) if (in[pos(x + 1, y - 1)] > 0)
-                neighbors++;
-
-        if (in[pos(x + 1, y)] > 0)
-            neighbors++;
-
-        if (y < 1079) if (in[pos(x + 1, y + 1)] > 0)
-                neighbors++;
-    }
-
-/*
-    for (int i = -1; i < 2; i++)
-        if (x >= -i && x + i < 1920)
-            for (int j = -1; j < 2; j++)
-                if (y >= -j && y + j < 1080)
-                    if (in[pos(x + i, y + j)] > 0)
-                        neighbors++;*/
-
+    if (in[pos(x, y)] > 0)
+        neighbors--;
 
 
     if (neighbors == 2)
         out[pos(x, y)] = in[pos(x, y)];
 
     else if (neighbors == 3)
-        out[pos(x, y)] = 0xff;
+        out[pos(x, y)] = 1;
     else out[pos(x,y)] = 0;
+
+    //if (out[pos(x,y)]) out[pos(x-2,y+2)] = 0xff;
+}
+
+__global__ void cyclic(const uint8_t* in, uint8_t* out)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    uint8_t cur = in[pos(x, y)];
+    uint8_t target = (cur + 1) % n_colour;
+    out[pos(x, y)] = cur;
+
+    for (int i = - (x > 0 ? 1 : 0); i < 1 + (x < 1919 ? 1 : 0); i++)
+        for (int j = - (y > 0 ? 1 : 0); j < 1 + (y < 1079 ? 1 : 0); j++)
+            if (in[pos(x + i, y + j)] == target)
+                out[pos(x, y)] = target;
+}
+
+__global__ void cyclic_bugged(const uint8_t* in, uint8_t* out)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    uint8_t cur = in[pos(x, y)];
+    uint8_t target = (cur + 1) % n_colour;
+    out[pos(x, y)] = cur;
+
+    for (int i = - (x > 0 ? 1 : 0); i < 1 + (x < 1919 ? 1 : 0); i++)
+        for (int j = - (y > 0 ? 1 : 0); j < 1 + (y < 1079 ? 1 : 0); j++)
+            if (i != 0 && j != 0 && in[pos(x + i, y + j)] == target)
+                out[pos(x, y)] = target;
 }
 
 __global__ void draw(const uint8_t* in, uint32_t* out)
 {
     unsigned int x = blockIdx.x * blockDim.x + threadIdx.x, y = blockIdx.y * blockDim.y + threadIdx.y;
-    if(in[pos(x, y)] == 0xff)
+    if(in[pos(x, y)])
         out[pos(x,y)] = 0x00006400;
     else
-        out[pos(x, y)] = 0x00141414 ;
+        out[pos(x, y)] = 0xff1a1a1a;
 }
+
+__global__ void cdraw(const uint8_t* in, uint32_t* out)
+{
+    const uint32_t colormap[] = {0xffbf3f3f, 0xffbf663f, 0xffbf8c3f, 0xffbfb23f, 0xffa5bf3f, 0xff7fbf3f, 0xff59bf3f, 0xff3fbf4c, 0xff3fbf72, 0xff3fbf99, 0xff3fbfbf, 0xff3f99bf, 0xff3f72bf, 0xff3f4cbf, 0xff593fbf, 0xff7f3fbf, 0xffa53fbf, 0xffbf3fb2, 0xffbf3f8c, 0xffbf3f66, 0xffbf3f3f, 0xffbf663f, 0xffbf8c3f, 0xffbfb23f, 0xffa5bf3f, 0xff7fbf3f, 0xff59bf3f, 0xff3fbf4c, 0xff3fbf72, 0xff3fbf99, 0xff3fbfbf, 0xff3f99bf, 0xff3f72bf, 0xff3f4cbf, 0xff3f3fbf, 0xff3f3fbf, 0xff3f3fbf, 0xff3f3fb2, 0xff3f3f8c, 0xff3f3f66};
+
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x, y = blockIdx.y * blockDim.y + threadIdx.y;
+    out[pos(x,y)] = colormap[in[pos(x,y)] % n_colour];
+}
+
 
 
 int main(int argc, char* argv[])
@@ -98,17 +119,22 @@ int main(int argc, char* argv[])
     if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_XORWOW) !=CURAND_STATUS_SUCCESS) SDL_Log("WE FUCKED UP: %s", cudaGetErrorString(cudaGetLastError()));
     curandSetPseudoRandomGeneratorSeed(gen, rand());
     cudaError_t err;
-
+    
+    SDL_Log("set cuda device");
     if (cudaSetDevice(0) != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
         return 1;
     }
+    
+    SDL_Log("Window init");
 
     SDL_Window* win = SDL_CreateWindow("conway's game of cuda", 0, 0, 1920, 1080,
                                        SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MOUSE_FOCUS |
                                        0 | SDL_WINDOW_ALLOW_HIGHDPI |
                                        SDL_WINDOW_SKIP_TASKBAR | SDL_WINDOW_SHOWN );
+    SDL_Renderer* ren = SDL_CreateRenderer(win, 0, 0);
 
+    SDL_Log("we rendering");
     SDL_Surface* sur = SDL_GetWindowSurface(win);
     SDL_Log("surdim : %i, surf: bpp: %i, fmt: %i, %s, h: %i, pitch: %i, pitch/4 : %f", sur->pitch * sur->h / 4, sur->format->BitsPerPixel, sur->format->format, SDL_GetPixelFormatName(sur->format->format), sur->h, sur->pitch, sur->pitch / 4.);
 
@@ -124,12 +150,13 @@ int main(int argc, char* argv[])
 
 
     bool running = true;
-    bool pause = false;
-    int time;
+    bool pause = true;
+    // int time = 0;
+    uint8_t delay = 0;
 
     while (running)
     {
-        time = SDL_GetTicks();
+        // time = SDL_GetTicks();
         SDL_Event e;
         while(SDL_PollEvent(&e)) {
             switch(e.type) {
@@ -139,6 +166,7 @@ int main(int argc, char* argv[])
                 case SDL_KEYUP:
                     switch (e.key.keysym.sym) {
                         case SDLK_r:
+                            SDL_Log("rand");
                             if (curandGenerate(gen, reinterpret_cast<unsigned int *>(board), 1080 * 1920 / 4) !=
                                 CURAND_STATUS_SUCCESS)
                                 SDL_Log("RANDOM FUCKED UP");
@@ -153,9 +181,19 @@ int main(int argc, char* argv[])
 
                         case SDLK_q:
                             running = false;
+                            break;
 
                         case SDLK_c:
                             cudaMemset(board, 0, 1920 * 1080);
+                            break;
+                        
+                        case SDLK_UP:
+                            delay += 1;
+                            break;
+                            
+                        case SDLK_DOWN:
+                            delay -= 1;
+                            break;
 
                         default:
                             break;
@@ -179,7 +217,8 @@ int main(int argc, char* argv[])
         }
         //SDL_Log("before");
         if (!pause) {
-            conway<<<blocks, threads>>>(board, buffer);
+            clear<<<blocks, threads>>>(buffer);
+            cyclic_bugged<<<blocks, threads>>>(board, buffer);
             err = cudaDeviceSynchronize();
             if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
             //SDL_Log("%s", cudaGetErrorString(cudaGetLastError()));
@@ -187,16 +226,23 @@ int main(int argc, char* argv[])
             buffer = board;
             board = temp;
         }
-        draw<<<blocks, threads>>>(board, colours);
+        
+        
+        cdraw<<<blocks, threads>>>(board, colours);
         err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
+        if (err != cudaSuccess) 
+            SDL_Log("%s", cudaGetErrorString(err));
         //SDL_Log("helo");
         SDL_LockSurface(sur);
-        cudaMemcpy(sur->pixels, colours, 4* 1080 * 1920, cudaMemcpyDeviceToHost);
+        if (cudaMemcpy(sur->pixels, colours, 4* 1080 * 1920, cudaMemcpyDeviceToHost) != cudaSuccess)
+            SDL_Log("Oops!");
         SDL_UpdateWindowSurface(win);
         SDL_UnlockSurface(sur);
+        // SDL_SetRenderDrawColor(ren, 255, 0, 0, 0);
+        // SDL_RenderClear(ren);
+        // SDL_RenderPresent(ren);
         // while (SDL_GetTicks() - time < 4);
-        // SDL_Delay(1);
+        SDL_Delay(delay);
         // SDL_Log("here\n\n");
         // SDL_Log("frametime: %i", SDL_GetTicks() - time);
     }
