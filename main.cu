@@ -9,7 +9,9 @@
 const dim3 threads(128, 8, 1);
 const dim3 blocks(15, 135, 1);
 
-#define n_colour 25
+void (*update)(const uint8_t* in, uint8_t* out);
+
+#define n_colour 22
 
 __device__ uint32_t pos(uint32_t x, uint32_t y)
 {
@@ -21,7 +23,7 @@ __global__ void solidify(uint8_t* arr)
     unsigned int ind = pos(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
     arr[ind] %= n_colour;
     return;
-    if (arr[ind] % 2 == 1)
+    if (arr[ind] % 3 == 1)
         arr[ind] = 0xff;
     else
         arr[ind] = 0;
@@ -57,6 +59,31 @@ __global__ void conway(const uint8_t* in, uint8_t* out)
     else out[pos(x,y)] = 0;
 
     //if (out[pos(x,y)]) out[pos(x-2,y+2)] = 0xff;
+}
+
+__global__ void day_night(const uint8_t* in, uint8_t* out)
+{
+    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    int neighbors = 0;
+
+    for (int i = - (x > 0 ? 1 : 0); i < 1 + (x < 1919 ? 1 : 0); i++)
+        for (int j = - (y > 0 ? 1 : 0); j < 1 + (y < 1079 ? 1 : 0); j++)
+            if (in[pos(x + i, y + j)] % 2)
+                neighbors++;
+    
+
+    if (in[pos(x, y)] > 0)
+        neighbors--;
+
+
+    if (neighbors == 3 || neighbors == 6 || neighbors == 7 || neighbors == 8)
+        out[pos(x, y)] = 1;
+    else if (neighbors == 4)
+        out[pos(x, y)] = in[pos(x, y)];
+    else
+        out[pos(x, y)] = 0;
 }
 
 __global__ void cyclic(const uint8_t* in, uint8_t* out)
@@ -116,6 +143,9 @@ int main(int argc, char* argv[])
     uint8_t* buffer;
     uint32_t* colours;
     curandGenerator_t gen;
+
+    update = &conway;
+
     if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_XORWOW) !=CURAND_STATUS_SUCCESS) SDL_Log("WE FUCKED UP: %s", cudaGetErrorString(cudaGetLastError()));
     curandSetPseudoRandomGeneratorSeed(gen, rand());
     cudaError_t err;
@@ -153,6 +183,7 @@ int main(int argc, char* argv[])
     bool pause = true;
     // int time = 0;
     uint8_t delay = 0;
+    uint8_t stencil = 0;
 
     while (running)
     {
@@ -186,6 +217,12 @@ int main(int argc, char* argv[])
                         case SDLK_c:
                             cudaMemset(board, 0, 1920 * 1080);
                             break;
+
+                        case SDLK_s:
+                            if (update == conway)
+                                update = day_night;
+                            else
+                                update = conway;
                         
                         case SDLK_UP:
                             delay += 1;
@@ -193,6 +230,14 @@ int main(int argc, char* argv[])
                             
                         case SDLK_DOWN:
                             delay -= 1;
+                            break;
+
+                        case SDLK_RIGHT:
+                            stencil += 1;
+                            break;
+                            
+                        case SDLK_LEFT:
+                            stencil -= 1;
                             break;
 
                         default:
@@ -203,10 +248,14 @@ int main(int argc, char* argv[])
 
                 case SDL_MOUSEMOTION:
                     if (e.motion.state & SDL_BUTTON_RMASK) {
-                        err = cudaMemset(board + e.motion.x + 1920 * e.motion.y, 0x00, 2);
+                        for (int i = -stencil; i <= stencil; i++)
+                            for (int j = -stencil; j <= stencil; j++)
+                                err = cudaMemset(board + (e.motion.x + i) + 1920 * (e.motion.y +j), 0x00, 2);
                         if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
                     } else if (e.motion.state & SDL_BUTTON_LMASK) {
-                        err = cudaMemset(board + e.motion.x + 1920 * e.motion.y, 0xff, 2);
+                        for (int i = -stencil; i <= stencil; i++)
+                            for (int j = -stencil; j <= stencil; j++)
+                                err = cudaMemset(board + (e.motion.x + i) + 1920 * (e.motion.y +j), 0x01, 2);
                         if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
                     }
                     break;
@@ -218,7 +267,7 @@ int main(int argc, char* argv[])
         //SDL_Log("before");
         if (!pause) {
             clear<<<blocks, threads>>>(buffer);
-            cyclic_bugged<<<blocks, threads>>>(board, buffer);
+            update<<<blocks, threads>>>(board, buffer);
             err = cudaDeviceSynchronize();
             if (err != cudaSuccess) SDL_Log("%s", cudaGetErrorString(err));
             //SDL_Log("%s", cudaGetErrorString(cudaGetLastError()));
@@ -228,7 +277,7 @@ int main(int argc, char* argv[])
         }
         
         
-        cdraw<<<blocks, threads>>>(board, colours);
+        draw<<<blocks, threads>>>(board, colours);
         err = cudaDeviceSynchronize();
         if (err != cudaSuccess) 
             SDL_Log("%s", cudaGetErrorString(err));
