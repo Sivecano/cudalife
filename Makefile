@@ -1,5 +1,5 @@
 LDFLAGS=-lSDL2 -l curand
-CFLAGS=-O2 -g
+CFLAGS=-O3 -g
 
 cudalife: main.o
 	nvcc -o $@ $< ${CFLAGS} ${LDFLAGS}
