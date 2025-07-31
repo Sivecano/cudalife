@@ -1,5 +1,16 @@
-build: Makefile main.cu
-	nvcc -o cudalife main.cu -O3 -lSDL2 -l curand
+LDFLAGS=-lSDL2 -l curand
+CFLAGS=-O2 -g
 
-run: build
+cudalife: main.o
+	nvcc -o $@ $< ${CFLAGS} ${LDFLAGS}
+
+main.o: main.cu
+	nvcc -c $< -o $@ ${CFLAGS}
+
+.PHONY:  clean
+clean:
+	rm cudalife
+	rm main.o
+
+run: cudalife
 	./cudalife
